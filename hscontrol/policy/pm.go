@@ -1,9 +1,9 @@
 package policy
 
 import (
+	"fmt"
 	"net/netip"
 
-	policyv1 "github.com/juanfont/headscale/hscontrol/policy/v1"
 	policyv2 "github.com/juanfont/headscale/hscontrol/policy/v2"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"tailscale.com/envknob"
@@ -41,10 +41,7 @@ func NewPolicyManager(pol []byte, users []types.User, nodes types.Nodes) (Policy
 			return nil, err
 		}
 	} else {
-		polMan, err = policyv1.NewPolicyManager(pol, users, nodes)
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("policy v1 is deprecated, please enable HEADSCALE_EXPERIMENTAL_POLICY_V2")
 	}
 
 	return polMan, err
@@ -70,9 +67,6 @@ func PolicyManagersForTest(pol []byte, users []types.User, nodes types.Nodes) ([
 func PolicyManagerFuncsForTest(pol []byte) []func([]types.User, types.Nodes) (PolicyManager, error) {
 	var polmanFuncs []func([]types.User, types.Nodes) (PolicyManager, error)
 
-	polmanFuncs = append(polmanFuncs, func(u []types.User, n types.Nodes) (PolicyManager, error) {
-		return policyv1.NewPolicyManager(pol, u, n)
-	})
 	polmanFuncs = append(polmanFuncs, func(u []types.User, n types.Nodes) (PolicyManager, error) {
 		return policyv2.NewPolicyManager(pol, u, n)
 	})

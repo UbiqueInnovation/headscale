@@ -144,6 +144,10 @@ func (g Group) Validate() error {
 	return fmt.Errorf(`Group has to start with "group:", got: %q`, g)
 }
 
+func (g Group) String() string {
+	return string(g)
+}
+
 func (g *Group) UnmarshalJSON(b []byte) error {
 	*g = Group(strings.Trim(string(b), `"`))
 	if err := g.Validate(); err != nil {

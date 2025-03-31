@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -20,6 +21,7 @@ import (
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/rs/zerolog/log"
+	"github.com/tailscale/hujson"
 	"golang.org/x/oauth2"
 	"zgo.at/zcache/v2"
 )
@@ -296,6 +298,12 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 		return
 	}
 
+	policy, err := a.db.GetPolicy()
+	policyJson := policy.Data
+	updatedPolicy, err := AddUserToHujsonGroups([]byte(policyJson), user.Name, claims.Groups)
+	a.db.SetPolicy(string(updatedPolicy))
+	a.polMan.SetPolicy([]byte(updatedPolicy))
+
 	// TODO(kradalby): Is this comment right?
 	// If the node exists, then the node should be reauthenticated,
 	// if the node does not exist, and the machine key exists, then
@@ -335,6 +343,89 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 	// that we could not reauth nor register the node.
 	httpError(writer, NewHTTPError(http.StatusGone, "login session expired, try again", nil))
 	return
+}
+
+func AddUserToHujsonGroups(aclJSON []byte, username string, targetGroups []string) ([]byte, error) {
+	// Step 1: Parse huJSON
+	f, err := hujson.Parse(aclJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse hujson: %w", err)
+	}
+
+	// Step 2: Standardize (in-place)
+	f.Standardize()
+
+	// Step 3: Convert to map[string]any
+	var root map[string]any
+	if err := json.Unmarshal([]byte(f.Pack()), &root); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal standardized JSON: %w", err)
+	}
+
+	// Step 4: Update "groups"
+	groups, ok := root["groups"].(map[string]any)
+	if !ok {
+		groups = map[string]any{}
+		root["groups"] = groups
+	}
+
+	for _, group := range targetGroups {
+		// Get the member list
+		memberListRaw, ok := groups[group].([]any)
+		if !ok {
+			memberListRaw = []any{}
+		}
+
+		// Add username if not already present
+		found := false
+		for _, v := range memberListRaw {
+			if str, ok := v.(string); ok && str == username {
+				found = true
+				break
+			}
+		}
+		if !found {
+			memberListRaw = append(memberListRaw, username)
+		}
+
+		// Update the group
+		groups[group] = memberListRaw
+	}
+	targetGroupSet := make(map[string]bool, len(targetGroups))
+	for _, g := range targetGroups {
+		targetGroupSet[g] = true
+	}
+	// Remove the user from groups they are not in
+	for groupName, members := range groups {
+		if !targetGroupSet[groupName] {
+			// Remove user if present
+			memberList, ok := members.([]any)
+			if !ok {
+				continue
+			}
+
+			newList := make([]any, 0, len(memberList))
+			for _, v := range memberList {
+				if str, ok := v.(string); !ok || str != username {
+					newList = append(newList, v)
+				}
+			}
+			groups[groupName] = newList
+		}
+	}
+
+	// Step 5: Marshal to JSON
+	modifiedJSON, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal modified JSON: %w", err)
+	}
+
+	// Step 6: Re-parse to huJSON and return packed (preserves formatting)
+	final, err := hujson.Parse(modifiedJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-parse as hujson: %w", err)
+	}
+
+	return final.Pack(), nil
 }
 
 func extractCodeAndStateParamFromRequest(
