@@ -345,6 +345,13 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 	return
 }
 
+func normalizeGroupName(name string) string {
+	if !strings.HasPrefix(name, "group:") {
+		return "group:" + name
+	}
+	return name
+}
+
 func AddUserToHujsonGroups(aclJSON []byte, username string, targetGroups []string) ([]byte, error) {
 	// Step 1: Parse huJSON
 	f, err := hujson.Parse(aclJSON)
@@ -367,15 +374,17 @@ func AddUserToHujsonGroups(aclJSON []byte, username string, targetGroups []strin
 		groups = map[string]any{}
 		root["groups"] = groups
 	}
-
+	// Create a set of target groups for quick lookup
+	targetGroupSet := make(map[string]struct{}, len(targetGroups))
 	for _, group := range targetGroups {
-		// Get the member list
-		memberListRaw, ok := groups[group].([]any)
+		groupName := normalizeGroupName(group)
+		targetGroupSet[groupName] = struct{}{}
+
+		memberListRaw, ok := groups[groupName].([]any)
 		if !ok {
-			memberListRaw = []any{}
+			continue // skip groups that don't exist
 		}
 
-		// Add username if not already present
 		found := false
 		for _, v := range memberListRaw {
 			if str, ok := v.(string); ok && str == username {
@@ -385,32 +394,29 @@ func AddUserToHujsonGroups(aclJSON []byte, username string, targetGroups []strin
 		}
 		if !found {
 			memberListRaw = append(memberListRaw, username)
+			groups[groupName] = memberListRaw
 		}
+	}
 
-		// Update the group
-		groups[group] = memberListRaw
-	}
-	targetGroupSet := make(map[string]bool, len(targetGroups))
-	for _, g := range targetGroups {
-		targetGroupSet[g] = true
-	}
 	// Remove the user from groups they are not in
 	for groupName, members := range groups {
-		if !targetGroupSet[groupName] {
-			// Remove user if present
-			memberList, ok := members.([]any)
-			if !ok {
-				continue
-			}
-
-			newList := make([]any, 0, len(memberList))
-			for _, v := range memberList {
-				if str, ok := v.(string); !ok || str != username {
-					newList = append(newList, v)
-				}
-			}
-			groups[groupName] = newList
+		// Only remove from groups not in the target set
+		if _, shouldBeInGroup := targetGroupSet[groupName]; shouldBeInGroup {
+			continue
 		}
+
+		memberList, ok := members.([]any)
+		if !ok {
+			continue
+		}
+
+		newList := make([]any, 0, len(memberList))
+		for _, v := range memberList {
+			if str, ok := v.(string); !ok || str != username {
+				newList = append(newList, v)
+			}
+		}
+		groups[groupName] = newList
 	}
 
 	// Step 5: Marshal to JSON
