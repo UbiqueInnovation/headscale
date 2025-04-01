@@ -299,8 +299,21 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 	}
 
 	policy, err := a.db.GetPolicy()
+	if err != nil {
+		httpError(writer, err)
+		return
+	}
 	policyJson := policy.Data
 	updatedPolicy, err := AddUserToHujsonGroups([]byte(policyJson), user.Name, claims.Groups)
+	if err != nil {
+		httpError(writer, err)
+		return
+	}
+	updatedPolicy, err = AddSelfAclRuleForUser(updatedPolicy, user.Name)
+	if err != nil {
+		httpError(writer, err)
+		return
+	}
 	a.db.SetPolicy(string(updatedPolicy))
 	a.polMan.SetPolicy([]byte(updatedPolicy))
 
@@ -350,6 +363,63 @@ func normalizeGroupName(name string) string {
 		return "group:" + name
 	}
 	return name
+}
+
+func AddSelfAclRuleForUser(aclJSON []byte, username string) ([]byte, error) {
+	ast, err := hujson.Parse(aclJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parsing hujson: %w", err)
+	}
+	ast.Standardize()
+	aclJSON = ast.Pack()
+
+	var policy map[string]any
+	if err := json.Unmarshal(aclJSON, &policy); err != nil {
+		return nil, fmt.Errorf("unmarshalling ACL JSON: %w", err)
+	}
+
+	acls, ok := policy["acls"].([]any)
+	if !ok {
+		acls = []any{}
+	}
+
+	for _, item := range acls {
+		rule, ok := item.(map[string]any)
+		if !ok || rule["action"] != "accept" {
+			continue
+		}
+
+		src, ok := rule["src"].([]any)
+		dst, dstOk := rule["dst"].([]any)
+		if !ok || !dstOk || len(src) != 1 || len(dst) != 1 {
+			continue
+		}
+
+		srcStr, srcOK := src[0].(string)
+		dstStr, dstOK := dst[0].(string)
+
+		if srcOK && dstOK && srcStr == username && dstStr == username+":*" {
+			// Rule exists, return original
+			return aclJSON, nil
+		}
+	}
+
+	// Add new rule
+	newRule := map[string]any{
+		"action": "accept",
+		"src":    []any{username},
+		"dst":    []any{username + ":*"},
+	}
+	acls = append(acls, newRule)
+	policy["acls"] = acls
+
+	// Marshal back to JSON
+	modifiedJSON, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshalling updated policy: %w", err)
+	}
+
+	return modifiedJSON, nil
 }
 
 func AddUserToHujsonGroups(aclJSON []byte, username string, targetGroups []string) ([]byte, error) {
