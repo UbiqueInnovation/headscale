@@ -14,7 +14,7 @@ RUN apk add --no-cache git
 # to test specific commits of the Tailscale client. This is useful when trying to find out why
 # something specific broke between two versions of Tailscale with for example `git bisect`.
 # COPY ./tailscale .
-RUN git clone https://github.com/tailscale/tailscale.git
+RUN git clone https://github.com/UbiqueInnovation/headscale.git
 
 WORKDIR /go/src/tailscale
 
