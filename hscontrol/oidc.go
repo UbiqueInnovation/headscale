@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
-
+	"encoding/json"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gorilla/mux"
 	"github.com/juanfont/headscale/hscontrol/db"
@@ -18,6 +18,7 @@ import (
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/types/change"
 	"github.com/juanfont/headscale/hscontrol/util"
+	"github.com/tailscale/hujson"	
 	"github.com/rs/zerolog/log"
 	"golang.org/x/oauth2"
 	"zgo.at/zcache/v2"
@@ -315,6 +316,22 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 		return
 	}
 
+	policy, err := a.db.GetPolicy()
+	if err != nil {
+		httpError(writer, err)
+		return
+	}
+	policyJson := policy.Data
+	updatedPolicy, err := AddUserToHujsonGroups([]byte(policyJson), user.Name, claims.Groups)
+	if err != nil {
+		httpError(writer, err)
+		return
+	}
+
+	a.db.SetPolicy(string(updatedPolicy))
+	a.polMan.SetPolicy([]byte(updatedPolicy))
+
+
 	// Send policy update notifications if needed
 	a.h.Change(c)
 
@@ -596,3 +613,93 @@ func setCSRFCookie(w http.ResponseWriter, r *http.Request, name string) (string,
 
 	return val, nil
 }
+
+func normalizeGroupName(name string) string {
+	if !strings.HasPrefix(name, "group:") {
+		return "group:" + name
+	}
+	return name
+}
+
+func AddUserToHujsonGroups(aclJSON []byte, username string, targetGroups []string) ([]byte, error) {
+	// Step 1: Parse huJSON
+	f, err := hujson.Parse(aclJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse hujson: %w", err)
+	}
+
+	// Step 2: Standardize (in-place)
+	f.Standardize()
+
+	// Step 3: Convert to map[string]any
+	var root map[string]any
+	if err := json.Unmarshal([]byte(f.Pack()), &root); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal standardized JSON: %w", err)
+	}
+
+	// Step 4: Update "groups"
+	groups, ok := root["groups"].(map[string]any)
+	if !ok {
+		groups = map[string]any{}
+		root["groups"] = groups
+	}
+	// Create a set of target groups for quick lookup
+	targetGroupSet := make(map[string]struct{}, len(targetGroups))
+	for _, group := range targetGroups {
+		groupName := normalizeGroupName(group)
+		targetGroupSet[groupName] = struct{}{}
+
+		memberListRaw, ok := groups[groupName].([]any)
+		if !ok {
+			continue // skip groups that don't exist
+		}
+
+		found := false
+		for _, v := range memberListRaw {
+			if str, ok := v.(string); ok && str == username {
+				found = true
+				break
+			}
+		}
+		if !found {
+			memberListRaw = append(memberListRaw, username)
+			groups[groupName] = memberListRaw
+		}
+	}
+
+	// Remove the user from groups they are not in
+	for groupName, members := range groups {
+		// Only remove from groups not in the target set
+		if _, shouldBeInGroup := targetGroupSet[groupName]; shouldBeInGroup {
+			continue
+		}
+
+		memberList, ok := members.([]any)
+		if !ok {
+			continue
+		}
+
+		newList := make([]any, 0, len(memberList))
+		for _, v := range memberList {
+			if str, ok := v.(string); !ok || str != username {
+				newList = append(newList, v)
+			}
+		}
+		groups[groupName] = newList
+	}
+
+	// Step 5: Marshal to JSON
+	modifiedJSON, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal modified JSON: %w", err)
+	}
+
+	// Step 6: Re-parse to huJSON and return packed (preserves formatting)
+	final, err := hujson.Parse(modifiedJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-parse as hujson: %w", err)
+	}
+
+	return final.Pack(), nil
+}
+
