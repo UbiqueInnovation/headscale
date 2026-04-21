@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/juanfont/headscale/hscontrol/types/change"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/rs/zerolog/log"
+	"github.com/tailscale/hujson"
 	"golang.org/x/oauth2"
 	"zgo.at/zcache/v2"
 )
@@ -288,6 +290,34 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 		}
 
 		return
+	}
+
+	// Sync the authenticated user's OIDC groups into the ACL policy.
+	// This keeps the policy's group membership consistent with what the
+	// identity provider reports on every login.
+	if len(claims.Groups) > 0 {
+		pol, err := a.h.state.GetPolicy()
+		if err != nil {
+			httpError(writer, err)
+			return
+		}
+		updatedPolicy, err := AddUserToHujsonGroups([]byte(pol.Data), user.Name, claims.Groups)
+		if err != nil {
+			httpError(writer, err)
+			return
+		}
+		if _, err := a.h.state.SetPolicyInDB(string(updatedPolicy)); err != nil {
+			httpError(writer, err)
+			return
+		}
+		cs, err := a.h.state.ReloadPolicy()
+		if err != nil {
+			httpError(writer, err)
+			return
+		}
+		if len(cs) > 0 {
+			a.h.Change(cs...)
+		}
 	}
 
 	// TODO(kradalby): Is this comment right?
@@ -597,6 +627,92 @@ func renderOIDCCallbackTemplate(
 // getCookieName generates a unique cookie name based on a cookie value.
 func getCookieName(baseName, value string) string {
 	return fmt.Sprintf("%s_%s", baseName, value[:6])
+}
+
+func normalizeGroupName(name string) string {
+	if !strings.HasPrefix(name, "group:") {
+		return "group:" + name
+	}
+	return name
+}
+
+// AddUserToHujsonGroups updates the HuJSON ACL policy so that the given user is
+// a member of exactly the groups listed in targetGroups (adding them where missing
+// and removing them from any other groups in the policy).
+// Groups that exist in targetGroups but are not present in the policy are skipped.
+func AddUserToHujsonGroups(aclJSON []byte, username string, targetGroups []string) ([]byte, error) {
+	f, err := hujson.Parse(aclJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse hujson: %w", err)
+	}
+
+	f.Standardize()
+
+	var root map[string]any
+	if err := json.Unmarshal([]byte(f.Pack()), &root); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal standardized JSON: %w", err)
+	}
+
+	groups, ok := root["groups"].(map[string]any)
+	if !ok {
+		groups = map[string]any{}
+		root["groups"] = groups
+	}
+
+	targetGroupSet := make(map[string]struct{}, len(targetGroups))
+	for _, group := range targetGroups {
+		groupName := normalizeGroupName(group)
+		targetGroupSet[groupName] = struct{}{}
+
+		memberListRaw, ok := groups[groupName].([]any)
+		if !ok {
+			continue // skip groups that don't exist in the policy
+		}
+
+		found := false
+		for _, v := range memberListRaw {
+			if str, ok := v.(string); ok && str == username {
+				found = true
+				break
+			}
+		}
+		if !found {
+			memberListRaw = append(memberListRaw, username)
+			groups[groupName] = memberListRaw
+		}
+	}
+
+	// Remove the user from groups they are no longer in.
+	for groupName, members := range groups {
+		if _, shouldBeInGroup := targetGroupSet[groupName]; shouldBeInGroup {
+			continue
+		}
+
+		memberList, ok := members.([]any)
+		if !ok {
+			continue
+		}
+
+		newList := make([]any, 0, len(memberList))
+		for _, v := range memberList {
+			if str, ok := v.(string); !ok || str != username {
+				newList = append(newList, v)
+			}
+		}
+		groups[groupName] = newList
+	}
+
+	modifiedJSON, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal modified JSON: %w", err)
+	}
+
+	final, err := hujson.Parse(modifiedJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-parse as hujson: %w", err)
+	}
+
+	return final.Pack(), nil
 }
 
 func setCSRFCookie(w http.ResponseWriter, r *http.Request, name string) (string, error) {
