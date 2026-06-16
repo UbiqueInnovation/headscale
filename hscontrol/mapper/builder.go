@@ -63,6 +63,16 @@ func (b *MapResponseBuilder) hasErrors() bool {
 	return len(b.errs) > 0
 }
 
+// node looks up the requesting node, recording ErrNodeNotFoundMapper on miss.
+func (b *MapResponseBuilder) node() (types.NodeView, bool) {
+	nv, ok := b.mapper.state.GetNodeByID(b.nodeID)
+	if !ok {
+		b.addError(ErrNodeNotFoundMapper)
+	}
+
+	return nv, ok
+}
+
 // WithCapabilityVersion sets the capability version for the response.
 func (b *MapResponseBuilder) WithCapabilityVersion(capVer tailcfg.CapabilityVersion) *MapResponseBuilder {
 	b.capVer = capVer
@@ -71,9 +81,8 @@ func (b *MapResponseBuilder) WithCapabilityVersion(capVer tailcfg.CapabilityVers
 
 // WithSelfNode adds the requesting node to the response.
 func (b *MapResponseBuilder) WithSelfNode() *MapResponseBuilder {
-	nv, ok := b.mapper.state.GetNodeByID(b.nodeID)
+	nv, ok := b.node()
 	if !ok {
-		b.addError(ErrNodeNotFoundMapper)
 		return b
 	}
 
@@ -138,9 +147,8 @@ func (b *MapResponseBuilder) WithDebugConfig() *MapResponseBuilder {
 
 // WithSSHPolicy adds SSH policy configuration for the requesting node.
 func (b *MapResponseBuilder) WithSSHPolicy() *MapResponseBuilder {
-	node, ok := b.mapper.state.GetNodeByID(b.nodeID)
+	node, ok := b.node()
 	if !ok {
-		b.addError(ErrNodeNotFoundMapper)
 		return b
 	}
 
@@ -165,9 +173,8 @@ func (b *MapResponseBuilder) WithSSHPolicy() *MapResponseBuilder {
 
 // WithDNSConfig adds DNS configuration for the requesting node.
 func (b *MapResponseBuilder) WithDNSConfig() *MapResponseBuilder {
-	node, ok := b.mapper.state.GetNodeByID(b.nodeID)
+	node, ok := b.node()
 	if !ok {
-		b.addError(ErrNodeNotFoundMapper)
 		return b
 	}
 
@@ -178,9 +185,8 @@ func (b *MapResponseBuilder) WithDNSConfig() *MapResponseBuilder {
 
 // WithUserProfiles adds user profiles for the requesting node and given peers.
 func (b *MapResponseBuilder) WithUserProfiles(peers views.Slice[types.NodeView]) *MapResponseBuilder {
-	node, ok := b.mapper.state.GetNodeByID(b.nodeID)
+	node, ok := b.node()
 	if !ok {
-		b.addError(ErrNodeNotFoundMapper)
 		return b
 	}
 
@@ -195,9 +201,8 @@ func (b *MapResponseBuilder) WithUserProfiles(peers views.Slice[types.NodeView])
 // For autogroup:self policies, it returns per-node compiled rules.
 // For global policies, it returns the global filter reduced for this node.
 func (b *MapResponseBuilder) WithPacketFilters() *MapResponseBuilder {
-	node, ok := b.mapper.state.GetNodeByID(b.nodeID)
+	node, ok := b.node()
 	if !ok {
-		b.addError(ErrNodeNotFoundMapper)
 		return b
 	}
 
