@@ -51,6 +51,25 @@ keys remain all-access.
 - Expiring or deleting a non-existent pre-auth key now returns an error instead of silently succeeding [#3324](https://github.com/juanfont/headscale/pull/3324)
 - Improve systemd service file hardening [#3341](https://github.com/juanfont/headscale/pull/3341)
 
+## 0.29.2 (202x-xx-xx)
+
+**Minimum supported Tailscale client version: v1.80.0**
+
+### Changes
+
+A node whose stored name could not be turned into a valid FQDN — empty, or long
+enough that the full hostname exceeded 255 characters once the base domain was
+applied — broke map delivery for itself and for every peer that could see it.
+Affected clients looped on `PollNetMap: unexpected EOF` and reported being
+unable to reach the coordination server, while other clients were unaffected.
+The mapper now drops such a node from its peers' maps instead of failing the
+whole response, the long-poll handler returns an explicit error rather than an
+empty response, node renames that would exceed the hostname limit are rejected,
+and startup logs each node whose stored name needs fixing together with the
+command to fix it.
+
+[#3349](https://github.com/juanfont/headscale/pull/3349)
+
 ## 0.29.1 (2026-06-18)
 
 **Minimum supported Tailscale client version: v1.80.0**
