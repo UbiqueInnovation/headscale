@@ -1183,6 +1183,16 @@ func (pm *PolicyManager) ViaRoutesForPeer(viewer, peer types.NodeView) types.Via
 		grants = append(grants, aclToGrants(acl)...)
 	}
 
+	// Via steering only has an effect when at least one grant carries a
+	// via tag. Without one, every loop below either skips on
+	// len(grant.Via) == 0 or is gated on Include/Exclude, which stay
+	// empty. Returning early avoids resolving every grant's sources and
+	// destinations for every viewer/peer pair on every map build, which
+	// dominates CPU on tailnets that do not use via at all.
+	if !slices.ContainsFunc(grants, func(g Grant) bool { return len(g.Via) > 0 }) {
+		return result
+	}
+
 	// Resolve each grant's sources against the viewer once, and each
 	// grant's destinations into a flat prefix list. The three passes
 	// below reuse both results instead of re-resolving per pass.
