@@ -1,0 +1,34 @@
+# Production image for headscale.
+#
+# Unlike Dockerfile.integration (which builds a delve debug binary with
+# -gcflags="all=-N -l", disabling optimisation and inlining), this builds a
+# normal optimised binary suitable for production use.
+
+FROM docker.io/golang:1.26-trixie AS build
+ARG VERSION=dev
+ENV GOPATH=/go
+WORKDIR /go/src/headscale
+
+COPY go.mod go.sum /go/src/headscale/
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath \
+      -ldflags "-s -w -X github.com/juanfont/headscale/hscontrol/types.Version=$VERSION" \
+      -o /go/bin/headscale ./cmd/headscale
+
+FROM docker.io/debian:trixie-slim
+
+RUN apt-get update \
+  && apt-get install --no-install-recommends --yes ca-certificates jq sqlite3 dnsutils \
+  && rm -rf /var/lib/apt/lists/* \
+  && apt-get clean \
+  && mkdir -p /var/run/headscale
+
+COPY --from=build /go/bin/headscale /usr/local/bin/headscale
+
+ENTRYPOINT []
+EXPOSE 8080/tcp
+CMD ["headscale", "serve"]
