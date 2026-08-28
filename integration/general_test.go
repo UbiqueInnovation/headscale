@@ -867,7 +867,9 @@ func TestUpdateHostnameFromClient(t *testing.T) {
 		// Verify from each client's perspective
 		for _, client := range allClients {
 			status, err := client.Status()
-			assert.NoError(ct, err)
+			if !assert.NoError(ct, err) {
+				continue
+			}
 
 			// Check self node
 			selfID := string(status.Self.ID)
@@ -976,7 +978,9 @@ func TestExpireNode(t *testing.T) {
 	for _, client := range allClients {
 		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
 			status, err := client.Status()
-			assert.NoError(ct, err)
+			if !assert.NoError(ct, err) {
+				return
+			}
 
 			// Assert that we have the original count - self
 			assert.Len(ct, status.Peers(), spec.NodesPerUser-1, "Client %s should see correct number of peers", client.Hostname())
@@ -1007,7 +1011,9 @@ func TestExpireNode(t *testing.T) {
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
 		for _, client := range allClients {
 			status, err := client.Status()
-			assert.NoError(ct, err)
+			if !assert.NoError(ct, err) {
+				continue
+			}
 
 			if client.Hostname() != node.Name {
 				// Check if the expired node appears as expired in this client's peer list
@@ -1031,7 +1037,9 @@ func TestExpireNode(t *testing.T) {
 
 		assert.EventuallyWithT(t, func(c *assert.CollectT) {
 			status, err := client.Status()
-			assert.NoError(c, err)
+			if !assert.NoError(c, err) {
+				return
+			}
 
 			// Ensures that the node is present, and that it is expired.
 			peerStatus, ok := status.Peer[expiredNodeKey]
@@ -1130,7 +1138,9 @@ func TestSetNodeExpiryInFuture(t *testing.T) {
 		assert.EventuallyWithT(
 			t, func(ct *assert.CollectT) {
 				status, err := client.Status()
-				assert.NoError(ct, err)
+				if !assert.NoError(ct, err) {
+					return
+				}
 
 				peerStatus, ok := status.Peer[nodeKey]
 				assert.True(ct, ok, "node key should be present in peer list")
@@ -1247,7 +1257,9 @@ func TestDisableNodeExpiry(t *testing.T) {
 		assert.EventuallyWithT(
 			t, func(ct *assert.CollectT) {
 				status, err := client.Status()
-				assert.NoError(ct, err)
+				if !assert.NoError(ct, err) {
+					return
+				}
 
 				peerStatus, ok := status.Peer[nodeKey]
 				assert.True(ct, ok, "node key should be present in peer list")
@@ -1303,7 +1315,9 @@ func TestNodeOnlineStatus(t *testing.T) {
 	for _, client := range allClients {
 		assert.EventuallyWithT(t, func(c *assert.CollectT) {
 			status, err := client.Status()
-			assert.NoError(c, err)
+			if !assert.NoError(c, err) {
+				return
+			}
 
 			// Assert that we have the original count - self
 			assert.Len(c, status.Peers(), len(MustTestVersions)-1)
