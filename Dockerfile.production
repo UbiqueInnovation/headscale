@@ -5,7 +5,6 @@
 # normal optimised binary suitable for production use.
 
 FROM docker.io/golang:1.26-trixie AS build
-ARG VERSION=dev
 ENV GOPATH=/go
 WORKDIR /go/src/headscale
 
@@ -14,12 +13,24 @@ RUN go mod download
 
 COPY . .
 
+# Note: `headscale version` reports "dev" here, which matches the image that
+# was previously deployed. The version comes from Go build info, which needs
+# the .git directory, and .dockerignore excludes it. The image tag and the
+# OCI labels below are the source of truth for what is deployed.
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
-      -ldflags "-s -w -X github.com/juanfont/headscale/hscontrol/types.Version=$VERSION" \
+      -buildvcs=false \
+      -ldflags "-s -w" \
       -o /go/bin/headscale ./cmd/headscale
 
 FROM docker.io/debian:trixie-slim
+
+ARG VERSION=dev
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="headscale" \
+      org.opencontainers.image.source="https://github.com/UbiqueInnovation/headscale" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$VCS_REF"
 
 RUN apt-get update \
   && apt-get install --no-install-recommends --yes ca-certificates jq sqlite3 dnsutils \

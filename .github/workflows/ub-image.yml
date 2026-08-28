@@ -1,0 +1,70 @@
+name: Build and push Ubique headscale image
+
+# Builds the headscale image that gets deployed to ub-kub-dev via
+# UbiqueInnovation/headscale-deployment.
+#
+# This deliberately uses Dockerfile.production. The image was previously
+# built by hand from Dockerfile.integration, which produces a delve debug
+# binary with -gcflags="all=-N -l" (optimisation and inlining disabled) and
+# is documented in-file as being for testing only, "in no way endorsed as an
+# official nor supported release". That cost roughly 5x on hot paths.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to build and push (e.g. v0.29.2-ub-1)"
+        required: true
+
+run-name: "Build headscale image (${{ inputs.tag || github.ref_name }})"
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Resolve image tag
+        id: tag
+        shell: bash
+        run: echo "value=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Artifactory container registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ${{ secrets.UB_ARTIFACTORY_DOCKER_REGISTRY }}
+          username: ${{ secrets.UB_ARTIFACTORY_USER }}
+          password: ${{ secrets.UB_ARTIFACTORY_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: Dockerfile.production
+          platforms: linux/amd64
+          push: true
+          tags: ${{ secrets.UB_ARTIFACTORY_DOCKER_REGISTRY }}/headscale:${{ steps.tag.outputs.value }}
+          build-args: |
+            VERSION=${{ steps.tag.outputs.value }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### Image pushed"
+            echo
+            echo '`'"${{ secrets.UB_ARTIFACTORY_DOCKER_REGISTRY }}/headscale:${{ steps.tag.outputs.value }}"'`'
+            echo
+            echo "Deploy it with the \"Deploy Headscale to ub-kub-dev\" workflow in"
+            echo "UbiqueInnovation/headscale-deployment, using tag \`${{ steps.tag.outputs.value }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
