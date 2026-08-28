@@ -20,6 +20,13 @@ on:
 
 run-name: "Build headscale image (${{ inputs.tag || github.ref_name }})"
 
+# Hardcoded to match headscale-deployment, which pulls
+# docker.artifactory.ubique.ch/headscale:<tag>. There is no
+# UB_ARTIFACTORY_DOCKER_REGISTRY secret in this org, so referencing it
+# silently expands to "" and docker/login-action falls back to Docker Hub.
+env:
+  IMAGE: docker.artifactory.ubique.ch/headscale
+
 jobs:
   build:
     name: Build and push
@@ -36,7 +43,7 @@ jobs:
       - name: Login to Artifactory container registry
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
-          registry: ${{ secrets.UB_ARTIFACTORY_DOCKER_REGISTRY }}
+          registry: docker.artifactory.ubique.ch
           username: ${{ secrets.UB_ARTIFACTORY_USER }}
           password: ${{ secrets.UB_ARTIFACTORY_PASSWORD }}
 
@@ -50,7 +57,7 @@ jobs:
           file: Dockerfile.production
           platforms: linux/amd64
           push: true
-          tags: ${{ secrets.UB_ARTIFACTORY_DOCKER_REGISTRY }}/headscale:${{ steps.tag.outputs.value }}
+          tags: ${{ env.IMAGE }}:${{ steps.tag.outputs.value }}
           build-args: |
             VERSION=${{ steps.tag.outputs.value }}
             VCS_REF=${{ github.sha }}
@@ -63,7 +70,7 @@ jobs:
           {
             echo "### Image pushed"
             echo
-            echo '`'"${{ secrets.UB_ARTIFACTORY_DOCKER_REGISTRY }}/headscale:${{ steps.tag.outputs.value }}"'`'
+            echo '`'"${{ env.IMAGE }}:${{ steps.tag.outputs.value }}"'`'
             echo
             echo "Deploy it with the \"Deploy Headscale to ub-kub-dev\" workflow in"
             echo "UbiqueInnovation/headscale-deployment, using tag \`${{ steps.tag.outputs.value }}\`."
